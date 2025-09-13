@@ -16,6 +16,7 @@ st.set_page_config(page_title="Environmental Impact Estimator (ML)", layout="wid
 st.title("Environmental Impact Estimator — with Machine Learning")
 st.caption("Estimate your carbon footprint, see category breakdowns, and get AI-driven insights. Fast, visual, and extensible.")
 
+# ---------- Data loading (with auto-generate fallback) ----------
 @st.cache_data
 def load_emission_factors(path="emission_factors.csv"):
     if not os.path.exists(path):
@@ -38,8 +39,10 @@ def load_synthetic(path="synthetic_lifestyles.csv"):
 ef = load_emission_factors()
 syn = load_synthetic()
 
+# Quick lookup
 ef_map = ef.set_index("Item")["EmissionFactor"].to_dict()
 
+# ---------- Sidebar: user inputs ----------
 with st.sidebar:
     st.header("🧾 Your Daily Habits")
     transport_mode = st.selectbox("Mode of Transport", sorted(ef[ef["Category"]=="Transport"]["Item"].unique()))
@@ -49,30 +52,34 @@ with st.sidebar:
     meals_per_day = st.slider("Meals per day", 1, 5, 3)
     clothes_per_month = st.slider("Clothes / month", 0, 20, 2)
     electronics_per_year = st.slider("Electronics / year", 0, 10, 1)
-    fish_kg_day = st.number_input("Fish (kg/day, optional)", min_value=0.0, value=0.05, step=0.01)
+    beef_kg_day = st.number_input("Beef (kg/day, optional)", min_value=0.0, value=0.05, step=0.01)
     chicken_kg_day = st.number_input("Chicken (kg/day, optional)", min_value=0.0, value=0.15, step=0.01)
     veggies_kg_day = st.number_input("Veggies (kg/day, optional)", min_value=0.0, value=0.35, step=0.01)
 
+# ---------- Rule-based calculation ----------
 def calc_emissions(transport_mode, transport_km, electricity_kwh, diet_type, meals_per_day, clothes_per_month, electronics_per_year, beef, chicken, veggies):
     transport = ef_map.get(transport_mode, 0) * transport_km
     energy = ef_map.get("Electricity", 0.82) * electricity_kwh
     food_meal = ef_map.get(diet_type, 0) * meals_per_day
-    food_kg = ef_map.get("Fish", 6.0)*fish_kg_day + ef_map.get("Chicken", 6.9)*chicken + ef_map.get("Veggies", 2.0)*veggies
+    food_kg = ef_map.get("Beef", 27.0)*beef + ef_map.get("Chicken", 6.9)*chicken + ef_map.get("Veggies", 2.0)*veggies
     shopping = ef_map.get("Clothes", 10.0) * (clothes_per_month/30.0) + ef_map.get("Electronics", 50.0) * (electronics_per_year/365.0)
     total = transport + energy + food_meal + food_kg + shopping
     return transport, energy, (food_meal + food_kg), shopping, total
 
 em_transport, em_energy, em_food, em_shopping, em_total = calc_emissions(
-    transport_mode, transport_km, electricity_kwh, diet_type, meals_per_day, clothes_per_month, electronics_per_year, fish_kg_day, chicken_kg_day, veggies_kg_day
+    transport_mode, transport_km, electricity_kwh, diet_type, meals_per_day, clothes_per_month, electronics_per_year, beef_kg_day, chicken_kg_day, veggies_kg_day
 )
 
+# ---------- Machine Learning: train on synthetic dataset ----------
 ml_ready = syn.copy()
 if not syn.empty:
-    features = ["transport_mode","transport_km_day","electricity_kwh_day","diet_type","meals_per_day","clothes_per_month","electronics_per_year","fish_kg_day","chicken_kg_day","veggies_kg_day"]
+    features = ["transport_mode","transport_km_day","electricity_kwh_day","diet_type","meals_per_day","clothes_per_month","electronics_per_year","beef_kg_day","chicken_kg_day","veggies_kg_day"]
     target = "em_total"
 
     X = ml_ready[features]
     y = ml_ready[target]
+
+    # Preprocess: one-hot for categoricals
     cat_cols = ["transport_mode","diet_type"]
     num_cols = [c for c in features if c not in cat_cols]
 
@@ -88,6 +95,7 @@ if not syn.empty:
 
     model.fit(X, y)
 
+    # Evaluate on holdout (simple split)
     idx = int(0.8*len(ml_ready))
     X_tr, X_te = X.iloc[:idx], X.iloc[idx:]
     y_tr, y_te = y.iloc[:idx], y.iloc[idx:]
@@ -99,6 +107,8 @@ else:
     model = None
     r2 = None
     mae = None
+
+# Predict ML estimate for current user
 current_df = pd.DataFrame([{
     "transport_mode": transport_mode,
     "transport_km_day": transport_km,
@@ -107,7 +117,7 @@ current_df = pd.DataFrame([{
     "meals_per_day": meals_per_day,
     "clothes_per_month": clothes_per_month,
     "electronics_per_year": electronics_per_year,
-    "fish_kg_day": fish_kg_day,
+    "beef_kg_day": beef_kg_day,
     "chicken_kg_day": chicken_kg_day,
     "veggies_kg_day": veggies_kg_day
 }])
@@ -117,17 +127,22 @@ if model is not None:
 else:
     ml_pred = np.nan
 
+# ---------- Clustering (lifestyle segments) ----------
 segment_label = None
 if not syn.empty:
+    # Fit on numeric features only (with OHE for categorials via pipeline)
     k_pipe = Pipeline([("pre", pre), ("km", KMeans(n_clusters=3, random_state=42, n_init=10))])
     k_pipe.fit(X)
     seg = int(k_pipe.named_steps["km"].predict(k_pipe.named_steps["pre"].transform(current_df))[0])
+    # Name segments by average emissions
     labels_map = {}
     syn_segs = k_pipe.named_steps["km"].predict(k_pipe.named_steps["pre"].transform(X))
     syn_seg_em = pd.DataFrame({"seg": syn_segs, "em": y}).groupby("seg")["em"].mean().sort_values().index.tolist()
+    # Lowest mean -> "Low Impact", mid -> "Moderate", highest -> "High"
     ordered = {syn_seg_em[0]:"Low Impact 🌱", syn_seg_em[1]:"Moderate Impact 🌍", syn_seg_em[2]:"High Impact 🔥"}
     segment_label = ordered.get(seg, f"Segment {seg}")
 
+# ---------- Top KPIs ----------
 col1, col2, col3 = st.columns(3)
 col1.metric("Rule-based Footprint", f"{em_total:.2f} kg CO₂/day")
 if not np.isnan(ml_pred):
@@ -139,6 +154,7 @@ if segment_label:
 else:
     col3.metric("Lifestyle Segment", "—")
 
+# ---------- Breakdown donut (Plotly) ----------
 st.subheader("📊 Carbon Footprint Breakdown")
 labels = ["Transport","Energy","Food","Shopping"]
 values = [em_transport, em_energy, em_food, em_shopping]
@@ -148,6 +164,7 @@ fig = px.pie(
 fig.update_traces(textinfo="percent+label", pull=[0.05]*4)
 st.plotly_chart(fig, use_container_width=True)
 
+# ---------- What-if analysis (slider-based) ----------
 st.subheader("🧪 What-if Analysis")
 c1, c2 = st.columns(2)
 with c1:
@@ -157,7 +174,7 @@ with c2:
     new_elec = st.slider("Electricity (kWh/day) — scenario", 0.0, max(electricity_kwh*2, 20.0), float(electricity_kwh), step=0.5)
 
 em_t2, em_e2, em_f2, em_s2, em_total2 = calc_emissions(
-    new_transport_mode, new_km, new_elec, diet_type, meals_per_day, clothes_per_month, electronics_per_year, fish_kg_day, chicken_kg_day, veggies_kg_day
+    new_transport_mode, new_km, new_elec, diet_type, meals_per_day, clothes_per_month, electronics_per_year, beef_kg_day, chicken_kg_day, veggies_kg_day
 )
 
 fig2 = go.Figure()
@@ -169,13 +186,15 @@ st.plotly_chart(fig2, use_container_width=True)
 delta = em_total2 - em_total
 st.info(f"**Scenario impact:** {em_total2:.2f} kg CO₂/day ({delta:+.2f} vs current)")
 
+# ---------- Feature importance (if ML model available) ----------
 st.subheader("🧠 ML Model Insight")
 if model is not None:
     try:
         rf = model.named_steps["rf"]
+        # Extract feature names after preprocessing
         ohe = model.named_steps["pre"].named_transformers_["cat"]
         ohe_features = list(ohe.get_feature_names_out(["transport_mode","diet_type"]))
-        final_features = ohe_features + ["transport_km_day","electricity_kwh_day","meals_per_day","clothes_per_month","electronics_per_year","fish_kg_day","chicken_kg_day","veggies_kg_day"]
+        final_features = ohe_features + ["transport_km_day","electricity_kwh_day","meals_per_day","clothes_per_month","electronics_per_year","beef_kg_day","chicken_kg_day","veggies_kg_day"]
         importances = rf.feature_importances_
         top_idx = np.argsort(importances)[-10:][::-1]
         imp_df = pd.DataFrame({
@@ -185,10 +204,11 @@ if model is not None:
         fig_imp = px.bar(imp_df, x="feature", y="importance", title="Top Feature Importances")
         st.plotly_chart(fig_imp, use_container_width=True)
     except Exception as e:
-        st.write(f"Could not compute feature importances. {e}")
+        st.write("Could not compute feature importances.", e)
 else:
     st.write("Upload or generate a dataset to train the ML model.")
 
+# ---------- Tips (rule + data-driven) ----------
 st.subheader("💡 Personalized Suggestions")
 tips = []
 if em_transport > 5:
