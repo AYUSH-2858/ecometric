@@ -50,26 +50,26 @@ with st.sidebar:
     meals_per_day = st.slider("Meals per day", 1, 5, 3)
     clothes_per_month = st.slider("Clothes / month", 0, 20, 2)
     electronics_per_year = st.slider("Electronics / year", 0, 10, 1)
-    beef_kg_day = st.number_input("Beef (kg/day, optional)", min_value=0.0, value=0.05, step=0.01)
+    # Beef input removed
     chicken_kg_day = st.number_input("Chicken (kg/day, optional)", min_value=0.0, value=0.15, step=0.01)
     veggies_kg_day = st.number_input("Veggies (kg/day, optional)", min_value=0.0, value=0.35, step=0.01)
 
-def calc_emissions(transport_mode, transport_km, electricity_kwh, diet_type, meals_per_day, clothes_per_month, electronics_per_year, beef, chicken, veggies):
+def calc_emissions(transport_mode, transport_km, electricity_kwh, diet_type, meals_per_day, clothes_per_month, electronics_per_year, chicken, veggies):
     transport = ef_map.get(transport_mode, 0) * transport_km
     energy = ef_map.get("Electricity", 0.82) * electricity_kwh
     food_meal = ef_map.get(diet_type, 0) * meals_per_day
-    food_kg = ef_map.get("Beef", 27.0)*beef + ef_map.get("Chicken", 6.9)*chicken + ef_map.get("Veggies", 2.0)*veggies
+    food_kg = ef_map.get("Chicken", 6.9)*chicken + ef_map.get("Veggies", 2.0)*veggies
     shopping = ef_map.get("Clothes", 10.0) * (clothes_per_month/30.0) + ef_map.get("Electronics", 50.0) * (electronics_per_year/365.0)
     total = transport + energy + food_meal + food_kg + shopping
     return transport, energy, (food_meal + food_kg), shopping, total
 
 em_transport, em_energy, em_food, em_shopping, em_total = calc_emissions(
-    transport_mode, transport_km, electricity_kwh, diet_type, meals_per_day, clothes_per_month, electronics_per_year, beef_kg_day, chicken_kg_day, veggies_kg_day
+    transport_mode, transport_km, electricity_kwh, diet_type, meals_per_day, clothes_per_month, electronics_per_year, chicken_kg_day, veggies_kg_day
 )
 
 ml_ready = syn.copy()
 if not syn.empty:
-    features = ["transport_mode","transport_km_day","electricity_kwh_day","diet_type","meals_per_day","clothes_per_month","electronics_per_year","beef_kg_day","chicken_kg_day","veggies_kg_day"]
+    features = ["transport_mode","transport_km_day","electricity_kwh_day","diet_type","meals_per_day","clothes_per_month","electronics_per_year","chicken_kg_day","veggies_kg_day"]
     target = "em_total"
 
     X = ml_ready[features]
@@ -110,7 +110,6 @@ current_df = pd.DataFrame([{
     "meals_per_day": meals_per_day,
     "clothes_per_month": clothes_per_month,
     "electronics_per_year": electronics_per_year,
-    "beef_kg_day": beef_kg_day,
     "chicken_kg_day": chicken_kg_day,
     "veggies_kg_day": veggies_kg_day
 }])
@@ -160,7 +159,7 @@ with c2:
     new_elec = st.slider("Electricity (kWh/day) — scenario", 0.0, max(electricity_kwh*2, 20.0), float(electricity_kwh), step=0.5)
 
 em_t2, em_e2, em_f2, em_s2, em_total2 = calc_emissions(
-    new_transport_mode, new_km, new_elec, diet_type, meals_per_day, clothes_per_month, electronics_per_year, beef_kg_day, chicken_kg_day, veggies_kg_day
+    new_transport_mode, new_km, new_elec, diet_type, meals_per_day, clothes_per_month, electronics_per_year, chicken_kg_day, veggies_kg_day
 )
 
 fig2 = go.Figure()
@@ -178,7 +177,7 @@ if model is not None:
         rf = model.named_steps["rf"]
         ohe = model.named_steps["pre"].named_transformers_["cat"]
         ohe_features = list(ohe.get_feature_names_out(["transport_mode","diet_type"]))
-        final_features = ohe_features + ["transport_km_day","electricity_kwh_day","meals_per_day","clothes_per_month","electronics_per_year","beef_kg_day","chicken_kg_day","veggies_kg_day"]
+        final_features = ohe_features + ["transport_km_day","electricity_kwh_day","meals_per_day","clothes_per_month","electronics_per_year","chicken_kg_day","veggies_kg_day"]
         importances = rf.feature_importances_
         top_idx = np.argsort(importances)[-10:][::-1]
         imp_df = pd.DataFrame({
@@ -188,7 +187,7 @@ if model is not None:
         fig_imp = px.bar(imp_df, x="feature", y="importance", title="Top Feature Importances")
         st.plotly_chart(fig_imp, use_container_width=True)
     except Exception as e:
-        st.write("Could not compute feature importances.", e)
+        st.write(f"Could not compute feature importances. {e}")
 else:
     st.write("Upload or generate a dataset to train the ML model.")
 
